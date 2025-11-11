@@ -1,14 +1,17 @@
 /*
- * Código C++/Arduino para Leitor de Ponto NFC com ESP8266
- * * Funcionalidade:
+ * Código C++/Arduino para Leitor de Ponto NFC com ESP8266 (NodeMCU/LoLin)
+ *
+ * Funcionalidade:
  * 1. Conecta ao WiFi.
  * 2. Lê o UID de um cartão NFC (MFRC522).
  * 3. Envia o UID para a API Flask de relógio de ponto.
  * 4. Tenta registrar ENTRADA. Se já estiver "dentro", tenta registrar SAÍDA.
  */
 
-
-#include <WiFi.h>
+// Bibliotecas necessárias para o ESP8266
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h> // Para fazer requisições HTTP
+#include <WiFiClient.h>
 #include <ArduinoJson.h>       // Para criar o JSON payload
 #include <SPI.h>               // Para comunicação com o MFRC522
 #include <MFRC522.h>           // Para ler o NFC
@@ -18,18 +21,18 @@
 // ======================================================================
 
 // --- 1. Configurações de Rede ---
-const char* ssid = "Rede Maluso";
-const char* password = "malusomen";
+const char* ssid = "NOME_DA_SUA_REDE_WIFI";
+const char* password = "SENHA_DA_SUA_REDE_WIFI";
 
 // --- 2. Configuração da API ---
 // IMPORTANTE: NÃO USE "localhost" ou "127.0.0.1"!
 // Coloque o IP da sua máquina que está rodando a API Python.
 // (Ex: "192.168.1.105")
-const char* serverAddress = "10.230.155.59"; 
+const char* serverAddress = "COLOQUE_O_IP_DO_SEU_PC_AQUI"; 
 const int serverPort = 5000;
 
 // --- 3. Configurações dos Pinos do MFRC522 (NFC) ---
-// Pinos padrão para NodeMCU ou Wemos D1 Mini:
+// Pinos para a placa LoLin ESP8266 da foto
 // SCK  -> D5
 // MISO -> D6
 // MOSI -> D7
@@ -45,7 +48,7 @@ MFRC522 mfrc522(SS_PIN, RST_PIN); // Cria a instância do leitor
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n[Leitor de Ponto NFC] Iniciando...");
+  Serial.println("\n[Leitor de Ponto NFC - ESP8266] Iniciando...");
 
   connectToWiFi();
 
@@ -160,6 +163,7 @@ int enviarRequisicao(String endpoint, String idUsuario) {
   Serial.print("POST para: ");
   Serial.println(url);
 
+  // Sintaxe correta para o ESP8266
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
 
