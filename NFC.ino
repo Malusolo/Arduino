@@ -1,62 +1,68 @@
-/*
- * Código C++/Arduino para Leitor de Ponto NFC com ESP8266 (NodeMCU/LoLin)
- *
- * Funcionalidade:
- * 1. Conecta ao WiFi.
- * 2. Lê o UID de um cartão NFC (MFRC522).
- * 3. Envia o UID para a API Flask de relógio de ponto.
- * 4. Tenta registrar ENTRADA. Se já estiver "dentro", tenta registrar SAÍDA.
- */
-
 // Bibliotecas necessárias para o ESP8266
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h> // Para fazer requisições HTTP
 #include <WiFiClient.h>
 #include <ArduinoJson.h>       // Para criar o JSON payload
-#include <SPI.h>               // Para comunicação com o MFRC522
-#include <MFRC522.h>           // Para ler o NFC
+
+// Bibliotecas para o PN532 via I2C
+#include <Wire.h>
+#include <PN532_I2C.h>
+#include <PN532.h>
+#include <NfcAdapter.h> // Não é estritamente necessário se usar apenas PN532.h/PN532_I2C.h
 
 // ======================================================================
 // --- CONFIGURAÇÕES OBRIGATÓRIAS ---
 // ======================================================================
 
 // --- 1. Configurações de Rede ---
-const char* ssid = "NOME_DA_SUA_REDE_WIFI";
-const char* password = "SENHA_DA_SUA_REDE_WIFI";
+const char* ssid = "LRSBD";
+const char* password = "lrsbd2023";
 
 // --- 2. Configuração da API ---
-// IMPORTANTE: NÃO USE "localhost" ou "127.0.0.1"!
-// Coloque o IP da sua máquina que está rodando a API Python.
-// (Ex: "192.168.1.105")
-const char* serverAddress = "COLOQUE_O_IP_DO_SEU_PC_AQUI"; 
+const char* serverAddress = "162.120.186.86"; 
 const int serverPort = 5000;
 
-// --- 3. Configurações dos Pinos do MFRC522 (NFC) ---
-// Pinos para a placa LoLin ESP8266 da foto
-// SCK  -> D5
-// MISO -> D6
-// MOSI -> D7
-// SDA  -> D4 (SS)
-// RST  -> D3
+// --- 3. Configurações do Leitor PN532 (I2C) ---
+// O PN532 usando I2C no ESP8266 utiliza os pinos padrão de I2C:
+// SDA -> D2
+// SCL -> D1
+// Não há necessidade de configurar pinos RST/SS.
 
-#define RST_PIN D3 // Pino RST
-#define SS_PIN  D4 // Pino SDA (SS)
-
-MFRC522 mfrc522(SS_PIN, RST_PIN); // Cria a instância do leitor
+PN532_I2C pn532i2c(Wire);
+PN532 nfc(pn532i2c);
 
 // ======================================================================
 
+// Protótipos de função
+void connectToWiFi();
+void baterPonto(String idUsuario);
+int enviarRequisicao(String endpoint, String idUsuario);
+
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n[Leitor de Ponto NFC - ESP8266] Iniciando...");
+  Serial.println("\n[Leitor de Ponto NFC - ESP8266 com PN532] Iniciando...");
 
   connectToWiFi();
 
-  SPI.begin();       // Inicia o barramento SPI
-  mfrc522.PCD_Init(); // Inicia o leitor MFRC522
+  // --- Inicialização do PN532 ---
+  Wire.begin(); // Inicia o I2C
+  nfc.begin();
+
+  uint32_t versiondata = nfc.getFirmwareVersion();
+  if (!versiondata) {
+    Serial.println(">>> ERRO: Não encontrou o chip PN53x!");
+    delay(1000);
+    // Em produção, você pode querer reiniciar ou entrar em modo de falha.
+    // ESP.restart(); 
+  } else {
+    // Exibe a versão do firmware, como no seu primeiro código
+    Serial.print("Found chip PN5"); Serial.println((versiondata>>24) & 0xFF, HEX); 
+    Serial.print("Firmware ver. "); Serial.print((versiondata>>16) & 0xFF, DEC); 
+    Serial.print('.'); Serial.println((versiondata>>8) & 0xFF, DEC);
+  }
   
-  Serial.print("Status do Leitor MFRC522: ");
-  mfrc522.PCD_DumpVersionToSerial(); // Mostra versão do firmware
+  nfc.setPassiveActivationRetries(0xFF); // Tenta ler a cada 0xFF vezes
+  nfc.SAMConfig(); // Configura a placa para ler tags
 
   Serial.println("\n>>> Aproxime o cartão NFC para bater o ponto <<<");
 }
@@ -68,49 +74,55 @@ void loop() {
     connectToWiFi();
   }
 
-  // 1. Procura por novos cartões
-  if ( ! mfrc522.PICC_IsNewCardPresent()) {
-    delay(50); // Pequena pausa para não sobrecarregar
-    return;
-  }
+  handleCardRead();
+  delay(50); // Pequena pausa
+}
 
-  // 2. Seleciona um dos cartões (caso vários estejam presentes)
-  if ( ! mfrc522.PICC_ReadCardSerial()) {
-    delay(50);
-    return;
-  }
-
-  Serial.println("======================================");
-  Serial.println("Cartão NFC detectado!");
-
-  // 3. Obter o UID (ID Único) do cartão
-  String cardUid = "";
-  for (byte i = 0; i < mfrc522.uid.size; i++) {
-    // Adiciona um "0" à esquerda se for menor que 0x10 (ex: "0A" em vez de "A")
-    cardUid += (mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
-    cardUid += String(mfrc522.uid.uidByte[i], HEX);
-  }
-  cardUid.toUpperCase();
+void handleCardRead() {
+  boolean success;
+  // Buffer para armazenar o UID (máximo 7 bytes para ISO14443A)
+  uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  
+  uint8_t uidLength;                        
   
-  Serial.print("ID do Usuário (UID): ");
-  Serial.println(cardUid);
-
-  // 4. Tentar bater o ponto (Lógica "Tenta-Entrada-Depois-Saída")
-  baterPonto(cardUid);
-
-  // 5. Pausa para evitar leitura duplicada
-  mfrc522.PICC_HaltA(); // Coloca o cartão em modo "parado"
-  mfrc522.PCD_StopCrypto1(); // Para a criptografia
+  // Tenta ler um cartão tipo ISO14443A (Mifare, etc.) com timeout de 50ms
+  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, &uid[0], &uidLength, 50);
   
-  Serial.println("Ponto registrado. Aguardando 3 segundos...");
-  Serial.println("======================================\n");
-  delay(3000); // Pausa de 3 segundos
-  
-  Serial.println(">>> Aproxime o cartão NFC para bater o ponto <<<");
+  if (success) {
+    
+    Serial.println("======================================");
+    Serial.println("Cartão NFC detectado!");
+    
+    // 3. Obter o UID (ID Único) do cartão e formatar como String
+    String cardUid = "";
+    for (byte i = 0; i < uidLength; i ++) {
+      // Adiciona um "0" à esquerda se for menor que 0x10
+      cardUid += (uid[i] < 0x10 ? "0" : "");
+      // Converte para hexadecimal, igual ao código MFRC522 original (sem separador)
+      cardUid += String(uid[i], HEX); 
+    }
+    cardUid.toUpperCase();
+    
+    Serial.print("ID do Usuário (UID): ");
+    Serial.println(cardUid);
+
+    // 4. Tentar bater o ponto (Lógica "Tenta-Entrada-Depois-Saída")
+    baterPonto(cardUid);
+
+    // 5. Espera até que o cartão seja removido para evitar leituras duplicadas
+    // O timeout de 50ms na função permite que o loop continue rapidamente.
+    Serial.println("Ponto registrado. Aguardando remoção do cartão...");
+    while (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, &uid[0], &uidLength, 50)) {
+        delay(100);
+    }
+    
+    Serial.println("Cartão removido.");
+    Serial.println("======================================\n");
+    Serial.println(">>> Aproxime o cartão NFC para bater o ponto <<<");
+  }
 }
 
 /*
- * Função principal para bater o ponto
+ * Função principal para bater o ponto (mantida a mesma lógica)
  */
 void baterPonto(String idUsuario) {
   
@@ -120,7 +132,6 @@ void baterPonto(String idUsuario) {
 
   if (httpCodeEntrada == 201) { // 201 = "Created" (Sucesso na API)
     Serial.println(">>> SUCESSO: Entrada registrada!");
-    // (Aqui você pode acender um LED verde, por exemplo)
     return; 
   } 
   
@@ -134,24 +145,21 @@ void baterPonto(String idUsuario) {
 
     if (httpCodeSaida == 200) { // 200 = "OK" (Sucesso na API)
       Serial.println(">>> SUCESSO: Saída registrada!");
-      // (Aqui você pode acender um LED azul, por exemplo)
       return;
     } else {
       // A saída falhou por outro motivo (404, 500, etc)
       Serial.print(">>> ERRO: Saída falhou. Código HTTP: ");
       Serial.println(httpCodeSaida);
-      // (Aqui você pode acender um LED vermelho)
     }
   } else {
     // A entrada falhou por outro motivo (500, etc)
     Serial.print(">>> ERRO: Entrada falhou. Código HTTP: ");
     Serial.println(httpCodeEntrada);
-    // (Aqui você pode acender um LED vermelho)
   }
 }
 
 /*
- * Função helper para enviar a requisição POST com JSON
+ * Função helper para enviar a requisição POST com JSON (mantida a mesma lógica)
  */
 int enviarRequisicao(String endpoint, String idUsuario) {
   WiFiClient client;
@@ -163,7 +171,6 @@ int enviarRequisicao(String endpoint, String idUsuario) {
   Serial.print("POST para: ");
   Serial.println(url);
 
-  // Sintaxe correta para o ESP8266
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
 
@@ -190,16 +197,16 @@ int enviarRequisicao(String endpoint, String idUsuario) {
     }
 
     http.end();
-    return httpCode; // Retorna o código (ex: 201, 400, 404)
+    return httpCode; 
 
   } else {
     Serial.println("ERRO: Não foi possível iniciar o cliente HTTP.");
-    return -1; // Código de erro local (falha do ESP)
+    return -1; 
   }
 }
 
 /*
- * Função helper para conectar ao WiFi
+ * Função helper para conectar ao WiFi (mantida a mesma lógica)
  */
 void connectToWiFi() {
   Serial.print("Conectando a ");
