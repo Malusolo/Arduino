@@ -15,19 +15,17 @@
 // ======================================================================
 
 // --- 1. Configurações de Rede ---
-const char* ssid = "LRSBD";
-const char* password = "lrsbd2023";
+const char* ssid = "Rede Maluso";
+const char* password = "malusomen";
 
 // --- 2. Configuração da API ---
-const char* serverAddress = "162.120.186.86"; 
+// IP da sua máquina Windows rodando a API
+const char* serverAddress = "10.230.155.59";
 const int serverPort = 5000;
 
 // --- 3. Configurações do Leitor PN532 (I2C) ---
-// O PN532 usando I2C no ESP8266 utiliza os pinos padrão de I2C:
 // SDA -> D2
 // SCL -> D1
-// Não há necessidade de configurar pinos RST/SS.
-
 PN532_I2C pn532i2c(Wire);
 PN532 nfc(pn532i2c);
 
@@ -35,12 +33,12 @@ PN532 nfc(pn532i2c);
 
 // Protótipos de função
 void connectToWiFi();
-void baterPonto(String idUsuario);
-int enviarRequisicao(String endpoint, String idUsuario);
+void baterPonto(String cardUid); // MUDANÇA: 'idUsuario' agora é 'cardUid'
+int enviarRequisicao(String endpoint, String cardUid); // MUDANÇA: 'idUsuario' agora é 'cardUid'
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n[Leitor de Ponto NFC - ESP8266 com PN532] Iniciando...");
+  Serial.println("\n[Leitor de Ponto NFC v2 - ESP8266 com PN532] Iniciando...");
 
   connectToWiFi();
 
@@ -51,53 +49,42 @@ void setup() {
   uint32_t versiondata = nfc.getFirmwareVersion();
   if (!versiondata) {
     Serial.println(">>> ERRO: Não encontrou o chip PN53x!");
-    delay(1000);
-    // Em produção, você pode querer reiniciar ou entrar em modo de falha.
-    // ESP.restart(); 
+    while (1) { delay(10); } // Trava aqui se não achar o leitor
   } else {
-    // Exibe a versão do firmware, como no seu primeiro código
     Serial.print("Found chip PN5"); Serial.println((versiondata>>24) & 0xFF, HEX); 
     Serial.print("Firmware ver. "); Serial.print((versiondata>>16) & 0xFF, DEC); 
     Serial.print('.'); Serial.println((versiondata>>8) & 0xFF, DEC);
   }
   
-  nfc.setPassiveActivationRetries(0xFF); // Tenta ler a cada 0xFF vezes
-  nfc.SAMConfig(); // Configura a placa para ler tags
+  nfc.setPassiveActivationRetries(0xFF);
+  nfc.SAMConfig();
 
   Serial.println("\n>>> Aproxime o cartão NFC para bater o ponto <<<");
 }
 
 void loop() {
-  // Garante que o WiFi esteja conectado
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi desconectado. Tentando reconectar...");
     connectToWiFi();
   }
-
   handleCardRead();
-  delay(50); // Pequena pausa
+  delay(50);
 }
 
 void handleCardRead() {
   boolean success;
-  // Buffer para armazenar o UID (máximo 7 bytes para ISO14443A)
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  
   uint8_t uidLength;                        
   
-  // Tenta ler um cartão tipo ISO14443A (Mifare, etc.) com timeout de 50ms
   success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, &uid[0], &uidLength, 50);
   
   if (success) {
-    
     Serial.println("======================================");
     Serial.println("Cartão NFC detectado!");
     
-    // 3. Obter o UID (ID Único) do cartão e formatar como String
     String cardUid = "";
     for (byte i = 0; i < uidLength; i ++) {
-      // Adiciona um "0" à esquerda se for menor que 0x10
       cardUid += (uid[i] < 0x10 ? "0" : "");
-      // Converte para hexadecimal, igual ao código MFRC522 original (sem separador)
       cardUid += String(uid[i], HEX); 
     }
     cardUid.toUpperCase();
@@ -105,11 +92,10 @@ void handleCardRead() {
     Serial.print("ID do Usuário (UID): ");
     Serial.println(cardUid);
 
-    // 4. Tentar bater o ponto (Lógica "Tenta-Entrada-Depois-Saída")
+    // 4. Tentar bater o ponto
     baterPonto(cardUid);
 
-    // 5. Espera até que o cartão seja removido para evitar leituras duplicadas
-    // O timeout de 50ms na função permite que o loop continue rapidamente.
+    // 5. Espera até que o cartão seja removido
     Serial.println("Ponto registrado. Aguardando remoção do cartão...");
     while (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, &uid[0], &uidLength, 50)) {
         delay(100);
@@ -122,50 +108,52 @@ void handleCardRead() {
 }
 
 /*
- * Função principal para bater o ponto (mantida a mesma lógica)
+ * Função principal para bater o ponto (Lógica "Tenta-Entrada-Depois-Saída")
  */
-void baterPonto(String idUsuario) {
+void baterPonto(String cardUid) { // MUDANÇA: Renomeado para 'cardUid' para clareza
   
   // --- TENTATIVA DE ENTRADA ---
   Serial.println("Tentando registrar ENTRADA...");
-  int httpCodeEntrada = enviarRequisicao("/ponto/entrada", idUsuario);
+  // Passa o cardUid para a função de requisição
+  int httpCodeEntrada = enviarRequisicao("/ponto/entrada", cardUid);
 
-  if (httpCodeEntrada == 201) { // 201 = "Created" (Sucesso na API)
+  if (httpCodeEntrada == 201) {
     Serial.println(">>> SUCESSO: Entrada registrada!");
+    // (Aqui podemos adicionar o feedback de LED Verde)
     return; 
   } 
   
   if (httpCodeEntrada == 400) {
-    // Código 400 (Bad Request) significa "Usuário já possui ponto em aberto"
-    Serial.println("ENTRADA falhou (usuário já está 'dentro').");
+    Serial.println("ENTRADA falhou (Pode ser 'Já está dentro' ou 'card_uid' faltando).");
     Serial.println("Tentando registrar SAÍDA...");
     
     // --- TENTATIVA DE SAÍDA ---
-    int httpCodeSaida = enviarRequisicao("/ponto/saida", idUsuario);
+    int httpCodeSaida = enviarRequisicao("/ponto/saida", cardUid);
 
-    if (httpCodeSaida == 200) { // 200 = "OK" (Sucesso na API)
+    if (httpCodeSaida == 200) {
       Serial.println(">>> SUCESSO: Saída registrada!");
+      // (Aqui podemos adicionar o feedback de LED Azul)
       return;
     } else {
-      // A saída falhou por outro motivo (404, 500, etc)
       Serial.print(">>> ERRO: Saída falhou. Código HTTP: ");
       Serial.println(httpCodeSaida);
+      // (Aqui podemos adicionar o feedback de LED Vermelho)
     }
   } else {
-    // A entrada falhou por outro motivo (500, etc)
+    // Outros erros (404 = Cartão não cadastrado, 500 = Erro de API, -1 = Falha de conexão)
     Serial.print(">>> ERRO: Entrada falhou. Código HTTP: ");
     Serial.println(httpCodeEntrada);
+    // (Aqui podemos adicionar o feedback de LED Vermelho)
   }
 }
 
 /*
- * Função helper para enviar a requisição POST com JSON (mantida a mesma lógica)
+ * Função helper para enviar a requisição POST com JSON
  */
-int enviarRequisicao(String endpoint, String idUsuario) {
+int enviarRequisicao(String endpoint, String cardUid) { // MUDANÇA: Renomeado para 'cardUid'
   WiFiClient client;
   HTTPClient http;
 
-  // Monta a URL completa: "http://192.168.1.105:5000/ponto/entrada"
   String url = "http://" + String(serverAddress) + ":" + String(serverPort) + endpoint;
   
   Serial.print("POST para: ");
@@ -174,19 +162,20 @@ int enviarRequisicao(String endpoint, String idUsuario) {
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
 
-    // Cria o corpo (payload) JSON: {"id_usuario": "UID_DO_CARTAO"}
-    StaticJsonDocument<100> jsonDoc; // Documento JSON pequeno
-    jsonDoc["id_usuario"] = idUsuario;
+    // Cria o corpo (payload) JSON
+    StaticJsonDocument<100> jsonDoc;
+    
+    // --- MUDANÇA CRÍTICA AQUI ---
+    // A API V2 espera "card_uid", não "id_usuario"
+    jsonDoc["card_uid"] = cardUid;
     
     String jsonPayload;
     serializeJson(jsonDoc, jsonPayload);
     Serial.print("Payload: ");
     Serial.println(jsonPayload);
 
-    // Envia a requisição POST
     int httpCode = http.POST(jsonPayload);
 
-    // Feedback no Serial Monitor
     if (httpCode > 0) {
       String response = http.getString();
       Serial.print("Resposta da API: ");
@@ -206,7 +195,7 @@ int enviarRequisicao(String endpoint, String idUsuario) {
 }
 
 /*
- * Função helper para conectar ao WiFi (mantida a mesma lógica)
+ * Função helper para conectar ao WiFi
  */
 void connectToWiFi() {
   Serial.print("Conectando a ");
