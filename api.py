@@ -1,15 +1,15 @@
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta
-# --- MUDANÇA: Importar o Swagger ---
+# --- MUDANÇA: Importa 'timezone' e 'timedelta' ---
+from datetime import datetime, timedelta, timezone
 from flasgger import Swagger
 
 # 1. Cria a instância do Flask
 app = Flask(__name__)
-
-# --- MUDANÇA: Inicia o Swagger ---
-# Isso vai criar a rota /apidocs automaticamente
 swagger = Swagger(app)
+
+# --- MUDANÇA: Define nosso fuso horário local (UTC-3) ---
+BR_TZ = timezone(timedelta(hours=-3))
 
 # 2. Configuração do Banco de Dados MySQL
 app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:.de1ate5@localhost:3306/minha_api_db'
@@ -18,7 +18,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # 3. Inicializa o SQLAlchemy
 db = SQLAlchemy(app)
 
-# --- Modelos 'Usuario' e 'RegistroPonto' (idênticos ao v2) ---
+# --- Modelos 'Usuario' e 'RegistroPonto' ---
 
 class Usuario(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -37,12 +37,20 @@ class RegistroPonto(db.Model):
     data_saida = db.Column(db.DateTime, nullable=True) 
 
     def to_dict(self):
+        entrada_local_iso = None
+        if self.data_entrada:
+            entrada_local_iso = self.data_entrada.replace(tzinfo=timezone.utc).astimezone(BR_TZ).isoformat()
+            
+        saida_local_iso = None
+        if self.data_saida:
+            saida_local_iso = self.data_saida.replace(tzinfo=timezone.utc).astimezone(BR_TZ).isoformat()
+
         return {
             'id': self.id,
             'id_usuario': self.id_usuario,
             'nome_usuario': self.usuario.nome if self.usuario else "Desconhecido",
-            'data_entrada': self.data_entrada.isoformat(),
-            'data_saida': self.data_saida.isoformat() if self.data_saida else None
+            'data_entrada': entrada_local_iso,
+            'data_saida': saida_local_iso
         }
 
 # --- ROTAS DA API ---
@@ -57,9 +65,9 @@ def home():
       200:
         description: A API está no ar.
         examples:
-          text/plain: API de Relógio de Ponto v3 (com Swagger) no ar!
+          text/plain: API de Relógio de Ponto v4 (com Timezone Local) no ar!
     """
-    return "API de Relógio de Ponto v3 (com Swagger) no ar!"
+    return "API de Relógio de Ponto v4 (com Timezone Local) no ar!"
 
 @app.route('/registrar', methods=['POST'])
 def registrar_usuario():
@@ -90,17 +98,13 @@ def registrar_usuario():
     data = request.json
     if not data or 'card_uid' not in data or 'nome' not in data:
         return jsonify({"mensagem": "Erro: 'card_uid' e 'nome' são obrigatórios."}), 400
-
     card_uid = data['card_uid']
     nome = data['nome']
-
     if Usuario.query.filter_by(card_uid=card_uid).first():
         return jsonify({"mensagem": f"Erro: Cartão {card_uid} já está cadastrado."}), 400
     if Usuario.query.filter_by(nome=nome).first():
         return jsonify({"mensagem": f"Erro: Nome '{nome}' já está em uso."}), 400
-
     novo_usuario = Usuario(card_uid=card_uid, nome=nome)
-    
     try:
         db.session.add(novo_usuario)
         db.session.commit()
@@ -108,7 +112,6 @@ def registrar_usuario():
     except Exception as e:
         db.session.rollback()
         return jsonify({"mensagem": f"Erro ao salvar no banco: {str(e)}"}), 500
-
 
 @app.route('/ponto/entrada', methods=['POST'])
 def bater_ponto_entrada():
@@ -132,9 +135,8 @@ def bater_ponto_entrada():
         schema:
           type: object
           properties:
-            acao: { type: string, example: "entrada" }
-            nome: { type: string, example: "Joao da Silva" }
-            data_entrada: { type: string, example: "2025-11-13T18:00:00Z" }
+            data_entrada: { type: string, example: "2025-11-13T18:00:00-03:00" }
+            nome_usuario: { type: string, example: "Joao da Silva" }
       400:
         description: Erro - Usuário já possui um ponto em aberto.
       404:
@@ -143,7 +145,6 @@ def bater_ponto_entrada():
     data = request.json
     if not data or 'card_uid' not in data:
         return jsonify({"mensagem": "Erro: 'card_uid' é obrigatório."}), 400
-    # ... (lógica da rota idêntica ao v2) ...
     card_uid = data['card_uid']
     usuario = Usuario.query.filter_by(card_uid=card_uid).first()
     if not usuario:
@@ -155,11 +156,7 @@ def bater_ponto_entrada():
     try:
         db.session.add(novo_registro)
         db.session.commit()
-        return jsonify({
-            "acao": "entrada", 
-            "nome": usuario.nome, 
-            "data_entrada": novo_registro.data_entrada.isoformat()
-        }), 201
+        return jsonify(novo_registro.to_dict()), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"acao": "erro", "mensagem": f"Erro ao salvar no banco: {str(e)}"}), 500
@@ -186,16 +183,15 @@ def bater_ponto_saida():
         schema:
           type: object
           properties:
-            acao: { type: string, example: "saida" }
-            nome: { type: string, example: "Joao da Silva" }
-            data_saida: { type: string, example: "2025-11-13T19:00:00Z" }
+            data_entrada: { type: string, example: "2025-11-13T18:00:00-03:00" }
+            data_saida: { type: string, example: "2025-11-13T19:00:00-03:00" }
+            nome_usuario: { type: string, example: "Joao da Silva" }
       404:
         description: Erro - Cartão não cadastrado ou nenhum ponto em aberto encontrado.
     """
     data = request.json
     if not data or 'card_uid' not in data:
         return jsonify({"mensagem": "Erro: 'card_uid' é obrigatório."}), 400
-    # ... (lógica da rota idêntica ao v2) ...
     card_uid = data['card_uid']
     usuario = Usuario.query.filter_by(card_uid=card_uid).first()
     if not usuario:
@@ -206,15 +202,11 @@ def bater_ponto_saida():
     ).order_by(RegistroPonto.data_entrada.desc()).first()
     if not registro_aberto:
         return jsonify({"acao": "erro", "mensagem": "Nenhum ponto em aberto."}), 404
+    
     registro_aberto.data_saida = datetime.utcnow()
     try:
         db.session.commit()
-        return jsonify({
-            "acao": "saida", 
-            "nome": usuario.nome,
-            "data_entrada": registro_aberto.data_entrada.isoformat(),
-            "data_saida": registro_aberto.data_saida.isoformat()
-        })
+        return jsonify(registro_aberto.to_dict())
     except Exception as e:
         db.session.rollback()
         return jsonify({"acao": "erro", "mensagem": f"Erro ao atualizar no banco: {str(e)}"}), 500
@@ -223,6 +215,7 @@ def bater_ponto_saida():
 def get_totais_por_usuario(card_uid):
     """
     Busca o total de horas trabalhadas (dia, semana, mês, total) para um usuário.
+    Calculado com base no fuso horário local (UTC-3).
     ---
     parameters:
       - name: card_uid
@@ -237,14 +230,23 @@ def get_totais_por_usuario(card_uid):
       404:
         description: Usuário não encontrado.
     """
-    # ... (lógica da rota idêntica ao v2) ...
     usuario = Usuario.query.filter_by(card_uid=card_uid).first()
     if not usuario:
         return jsonify({"mensagem": "Usuário não encontrado."}), 404
 
-    now = datetime.utcnow()
-    day_start = datetime(now.year, now.month, now.day)
-    day_end = day_start + timedelta(days=1)
+    now_local = datetime.now(BR_TZ) 
+
+    day_start_local = datetime(now_local.year, now_local.month, now_local.day, tzinfo=BR_TZ)
+    day_end_local = day_start_local + timedelta(days=1)
+
+    week_start_local = day_start_local - timedelta(days=now_local.weekday())
+    week_end_local = week_start_local + timedelta(days=7)
+
+    month_start_local = datetime(now_local.year, now_local.month, 1, tzinfo=BR_TZ)
+    if now_local.month == 12:
+        month_end_local = datetime(now_local.year + 1, 1, 1, tzinfo=BR_TZ)
+    else:
+        month_end_local = datetime(now_local.year, now_local.month + 1, 1, tzinfo=BR_TZ)
     
     registros = RegistroPonto.query.filter(
         RegistroPonto.id_usuario == usuario.id, 
@@ -253,30 +255,26 @@ def get_totais_por_usuario(card_uid):
 
     totals_sec = { 'day': 0.0, 'week': 0.0, 'month': 0.0, 'total': 0.0 }
     
-    def overlap_seconds(start_a, end_a, start_b, end_b):
-        latest_start = max(start_a, start_b)
-        earliest_end = min(end_a, end_b)
+    def overlap_seconds(start_a_aware, end_a_aware, start_b_aware, end_b_aware):
+        latest_start = max(start_a_aware, start_b_aware)
+        earliest_end = min(end_a_aware, end_b_aware)
         delta = (earliest_end - latest_start).total_seconds()
         return max(0.0, delta)
 
-    week_start = day_start - timedelta(days=now.weekday())
-    week_end = week_start + timedelta(days=7)
-    month_start = datetime(now.year, now.month, 1)
-    if now.month == 12:
-        month_end = datetime(now.year + 1, 1, 1)
-    else:
-        month_end = datetime(now.year, now.month + 1, 1)
-
     for r in registros:
-        s = r.data_entrada
-        e = r.data_saida
-        if not s or not e: continue
+        s_utc_naive = r.data_entrada
+        e_utc_naive = r.data_saida
+        if not s_utc_naive or not e_utc_naive: continue
         
-        dur_sec = (e - s).total_seconds()
+        s_utc_aware = s_utc_naive.replace(tzinfo=timezone.utc)
+        e_utc_aware = e_utc_naive.replace(tzinfo=timezone.utc)
+
+        dur_sec = (e_utc_aware - s_utc_aware).total_seconds()
         totals_sec['total'] += dur_sec
-        totals_sec['day'] += overlap_seconds(s, e, day_start, day_end)
-        totals_sec['week'] += overlap_seconds(s, e, week_start, week_end)
-        totals_sec['month'] += overlap_seconds(s, e, month_start, month_end)
+        
+        totals_sec['day'] += overlap_seconds(s_utc_aware, e_utc_aware, day_start_local, day_end_local)
+        totals_sec['week'] += overlap_seconds(s_utc_aware, e_utc_aware, week_start_local, week_end_local)
+        totals_sec['month'] += overlap_seconds(s_utc_aware, e_utc_aware, month_start_local, month_end_local)
     
     def secs_to_hours_float(sec): return round(sec / 3600.0, 2)
     def secs_to_hhmmss(sec):
@@ -298,5 +296,4 @@ def get_totais_por_usuario(card_uid):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    # Debug=True é útil, mas em produção mude para False
     app.run(host='0.0.0.0', port=5000, debug=True)
