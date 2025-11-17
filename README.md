@@ -27,7 +27,16 @@ Sistema completo de relógio de ponto inteligente que utiliza ESP8266 com leitor
 
 ### Instalação das Dependências
 ```bash
+# Criar ambiente virtual
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
 .\venv\Scripts\activate   # Windows
+
+#Instalar dependências
 pip install Flask Flask-SQLAlchemy PyMySQL flasgger
+```
+## Configuração do Banco:
+
+sql ```bash
+  CREATE DATABASE api_db;
+```
