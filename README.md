@@ -35,8 +35,16 @@ source venv/bin/activate  # Linux/Mac
 #Instalar dependências
 pip install Flask Flask-SQLAlchemy PyMySQL flasgger
 ```
-## Configuração do Banco:
+Configuração do Banco de Dados
 
-sql ```bash
+O sistema utiliza MySQL.
+1. Abra o MySQL Workbench (ou seu cliente de banco de dados preferido).
+2. Crie um novo banco de dados (schema) para o projeto:
+```bash
   CREATE DATABASE api_db;
+```
+##No arquivo api.py, edite a linha SQLALCHEMY_DATABASE_URI com suas credenciais do MySQL:
+```bash
+# Exemplo de configuração: (usuário: 'root', senha: 'exemplo', banco: 'minha_api_db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:.de1ate5@localhost:3306/minha_api_db'
 ```
