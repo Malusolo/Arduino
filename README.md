@@ -1,143 +1,33 @@
-⏰ Sistema de Ponto IoT com NFC e API Flask
+# Sistema de Ponto IoT com NFC e API Flask
 
-Este é um projeto completo de um sistema de "Relógio de Ponto" que utiliza hardware IoT (ESP8266 + Leitor NFC) para se comunicar com uma API backend (Flask + Python) e registrar as horas em um banco de dados MySQL.
+## Descrição do Projeto
+Sistema completo de relógio de ponto inteligente que utiliza ESP8266 com leitor NFC para registrar entradas e saídas através de uma API Flask.
 
-O sistema associa o ID único (UID) de um cartão NFC a um usuário cadastrado e registra os horários de entrada e saída.
+## Como Funciona
+1. Usuário aproxima cartão NFC do leitor
+2. ESP8266 lê o UID do cartão
+3. Conecta via WiFi e envia dados para API
+4. API processa e registra no banco MySQL
+5. Retorna confirmação para o dispositivo
 
-Toda a API é documentada e pode ser testada interativamente através do Swagger.
+## Tecnologias Utilizadas
 
-🚀 Como Funciona
+### Hardware
+- ESP8266 (NodeMCU)
+- Leitor NFC PN532
+- Conexão I2C
 
-Um usuário (previamente cadastrado na API) aproxima seu cartão NFC do leitor PN532.
+### Software
+- Python com Flask
+- MySQL
+- Arduino IDE (C++)
+- Swagger para documentação
 
-O ESP8266 lê o UID do cartão e se conecta à rede WiFi.
+## Configuração do Backend
 
-Ele envia o card_uid para a API (ex: POST /ponto/entrada).
-
-A API (Python/Flask) consulta o banco MySQL para verificar:
-
-O cartão está cadastrado?
-
-Este usuário já tem um ponto de entrada em aberto?
-
-Com base na lógica, a API registra uma Entrada (se o usuário estava fora) ou uma Saída (se o usuário já estava "dentro").
-
-A API retorna uma resposta em JSON (ex: "Sucesso") para o ESP8266, que a exibe no Monitor Serial.
-
-🛠️ Stack de Tecnologias
-
-Hardware (Dispositivo de Ponto)
-
-Microcontrolador: ESP8266 (Placa LoLin NodeMCU)
-
-Leitor NFC: PN532 (configurado em modo I2C)
-
-Firmware: C++ (Framework Arduino)
-
-Backend (API)
-
-Linguagem: Python
-
-Framework: Flask
-
-Banco de Dados: MySQL
-
-ORM: Flask-SQLAlchemy
-
-Documentação: Flasgger (Swagger UI)
-
-⚙️ Configuração e Instalação
-
-O projeto é dividido em duas partes principais: o Backend (API) e o Hardware (ESP8266).
-
-1. Backend (API - api_ponto_v4_local_time.py)
-
-Clone o repositório e navegue até a pasta do projeto.
-
-(Opcional, mas recomendado) Crie um ambiente virtual:
-
+### Instalação das Dependências
+```bash
 python -m venv venv
-source venv/bin/activate  # No Linux/Mac
-.\venv\Scripts\activate   # No Windows
-
-
-Instale as dependências do Python:
-
+source venv/bin/activate  # Linux/Mac
+.\venv\Scripts\activate   # Windows
 pip install Flask Flask-SQLAlchemy PyMySQL flasgger
-
-
-Crie o Banco de Dados: Abra o MySQL Workbench (ou seu cliente MySQL) e crie um novo banco:
-
-CREATE DATABASE minha_api_db;
-
-
-Configure a Conexão: No arquivo api_ponto_v4_local_time.py, atualize a linha SQLALCHEMY_DATABASE_URI com seu usuário, senha e o nome do banco:
-
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:SUA_SENHA@localhost:3306/minha_api_db'
-
-
-Execute a API:
-
-python api_ponto_v4_local_time.py
-
-
-A API irá criar as tabelas (usuario e registro_ponto) automaticamente na primeira vez que rodar.
-
-IMPORTANTE (Firewall): A API roda em host='0.0.0.0', o que significa que ela tenta escutar em todos os IPs. Você precisa ir até o Firewall do seu SO (Windows, Linux, etc.) e criar uma Regra de Entrada para permitir conexões TCP na porta 5000. Sem isso, o ESP8266 não conseguirá se conectar.
-
-2. Hardware (ESP8266 - NFC_v2.ino ou NFC_v3_Feedback.ino)
-
-Abra o arquivo NFC_v2.ino (ou v3) na sua IDE do Arduino.
-
-Instale as Bibliotecas: Vá em Ferramentas > Gerenciar Bibliotecas... e instale:
-
-Adafruit PN532 (e suas dependências, como Adafruit BusIO)
-
-ArduinoJson
-
-(Verifique se você tem o pacote de placas esp8266 instalado)
-
-Monte o Circuito:
-
-PN532 (I2C): SCL -> D1, SDA -> D2, VCC -> 3.3V, GND -> GND
-
-Configure o Código: Atualize estas variáveis no topo do arquivo:
-
-const char* ssid = "NOME_DA_SUA_REDE_WIFI";
-const char* password = "SENHA_DA_SUA_REDE_WIFI";
-const char* serverAddress = "IP_DO_PC_COM_A_API"; // Ex: "10.241.0.25"
-
-
-Carregue o Código: Selecione sua placa (NodeMCU 1.0) e a porta correta, e faça o upload.
-
-📖 Como Usar
-
-1. Documentação (Swagger)
-
-Com a API rodando, acesse a documentação interativa no seu navegador. É a forma mais fácil de testar as rotas:
-
-http://[IP_DO_SEU_PC]:5000/apidocs
-
-2. Registrar um Novo Usuário
-
-Antes de usar o leitor, você precisa associar um cartão a um nome.
-
-Aproxime o cartão do leitor e veja o UID no Monitor Serial (ex: DE284269).
-
-Use o Swagger (ou Postman) para fazer um POST na rota /registrar:
-
-Corpo (JSON):
-
-{
-  "card_uid": "DE284269",
-  "nome": "Seu Nome Aqui"
-}
-
-
-3. Bater o Ponto
-
-Aproxime o cartão registrado do leitor. O Monitor Serial da IDE do Arduino mostrará a resposta da API (ex: "SUCESSO: Entrada registrada!" ou "SUCESSO: Saída registrada!").
-
-4. Consultar Horas
-
-Use a rota GET /ponto/total/{card_uid} no Swagger para ver um JSON completo com o total de horas do usuário (diário, semanal, mensal e total).
