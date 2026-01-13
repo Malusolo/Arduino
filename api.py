@@ -1,8 +1,9 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template
 from flask_sqlalchemy import SQLAlchemy
 # Importa 'timezone' e 'timedelta'
 from datetime import datetime, timedelta, timezone
 from flasgger import Swagger
+import os
 
 # 1. Cria a instância do Flask
 app = Flask(__name__)
@@ -12,7 +13,11 @@ swagger = Swagger(app)
 BR_TZ = timezone(timedelta(hours=-3))
 
 # 2. Configuração do Banco de Dados MySQL
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:.de1ate5@localhost:3306/minha_api_db'
+# Tenta pegar a URL do sistema (Render), se não achar, usa a local
+db_url = os.environ.get('DATABASE_URL', 'mysql+pymysql://root:.de1ate5@localhost:3306/minha_api_db')
+
+# Corrige problema de prefixo do Render (se vier postgres:// muda para postgresql://, mas para mysql é direto)
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # 3. Inicializa o SQLAlchemy
@@ -41,7 +46,6 @@ class RegistroPonto(db.Model):
         # Converte para o fuso local (BR_TZ) antes de mostrar
         entrada_local_iso = None
         if self.data_entrada:
-            # Garante que seja tratado como UTC antes de converter
             entrada_utc = self.data_entrada.replace(tzinfo=timezone.utc)
             entrada_local_iso = entrada_utc.astimezone(BR_TZ).isoformat()
             
@@ -60,16 +64,108 @@ class RegistroPonto(db.Model):
 
 # --- ROTAS DA API ---
 
+# --- ROTAS DE PÁGINA (Frontend - Dashboard) ---
 @app.route('/')
+def index():
+    # Rota principal carrega o Dashboard
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        return f"Erro ao carregar a interface: {str(e)}", 500
+
+# Rota de Status (Antiga Home) - Mudei para /status para não conflitar com o Dashboard
+@app.route('/status')
 def home():
     """
-    Rota principal da API de Ponto.
+    Rota de verificação da API.
     ---
     responses:
       200:
         description: A API está no ar.
     """
     return "API de Relógio de Ponto v6 (Final - Offline Sync) no ar!"
+
+# --- ROTAS DE API (Dados) ---
+
+@app.route('/api/usuarios', methods=['GET'])
+def get_usuarios():
+    users = Usuario.query.order_by(Usuario.nome).all()
+    return jsonify([u.to_dict() for u in users])
+
+# NOVA ROTA: EXCLUIR USUÁRIO (CORRIGIDA)
+@app.route('/api/usuarios/<int:id>', methods=['DELETE'])
+def delete_usuario(id):
+    """
+    Exclui um usuário e seus registros.
+    ---
+    parameters:
+      - name: id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Usuário excluído.
+    """
+    usuario = Usuario.query.get(id)
+    if not usuario:
+        return jsonify({"mensagem": "Usuário não encontrado"}), 404
+    
+    try:
+        # CORREÇÃO: Apaga os registros iterativamente para garantir a consistência da sessão
+        registros = RegistroPonto.query.filter_by(id_usuario=id).all()
+        for reg in registros:
+            db.session.delete(reg)
+        
+        # Agora deleta o usuário
+        db.session.delete(usuario)
+        db.session.commit()
+        return jsonify({"mensagem": "Usuário excluído com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRO AO EXCLUIR: {e}") # Log no terminal para debug
+        return jsonify({"mensagem": f"Erro ao excluir: {str(e)}"}), 500
+
+@app.route('/api/historico', methods=['GET'])
+def get_historico():
+    data_str = request.args.get('data')
+    query = RegistroPonto.query
+    
+    if data_str:
+        try:
+            data_filtro = datetime.strptime(data_str, '%Y-%m-%d').date()
+            query = query.filter(db.func.date(RegistroPonto.data_entrada) == data_filtro)
+        except:
+            pass 
+
+    registros = query.order_by(RegistroPonto.data_entrada.desc()).all()
+    
+    lista = []
+    for reg in registros:
+        entrada_utc = reg.data_entrada.replace(tzinfo=timezone.utc)
+        entrada_local = entrada_utc.astimezone(BR_TZ)
+        
+        saida_local = None
+        duracao_str = ""
+        
+        if reg.data_saida:
+            saida_utc = reg.data_saida.replace(tzinfo=timezone.utc)
+            saida_local = saida_utc.astimezone(BR_TZ)
+            delta = reg.data_saida - reg.data_entrada
+            total_seconds = int(delta.total_seconds())
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, _ = divmod(remainder, 60)
+            duracao_str = f"{hours}h {minutes}m"
+
+        lista.append({
+            "card_uid": reg.usuario.card_uid if reg.usuario else "???",
+            "usuario_nome": reg.usuario.nome if reg.usuario else "Desconhecido",
+            "entrada": entrada_local.isoformat(),
+            "saida": saida_local.isoformat() if saida_local else None,
+            "duracao": duracao_str
+        })
+    
+    return jsonify(lista)
 
 @app.route('/registrar', methods=['POST'])
 def registrar_usuario():
@@ -109,9 +205,6 @@ def registrar_usuario():
         db.session.rollback()
         return jsonify({"mensagem": f"Erro ao salvar no banco: {str(e)}"}), 500
 
-# =================================================================
-# ROTA DE ENTRADA (ATUALIZADA PARA TIMESTAMP OFFLINE)
-# =================================================================
 @app.route('/ponto/entrada', methods=['POST'])
 def bater_ponto_entrada():
     """
@@ -145,23 +238,15 @@ def bater_ponto_entrada():
     if registro_aberto:
         return jsonify({"acao": "erro", "mensagem": "Já possui ponto em aberto."}), 400
     
-    # --- LÓGICA DE TIMESTAMP (OFFLINE) ---
-    data_registro = datetime.utcnow() # Padrão: agora (online)
-
+    data_registro = datetime.utcnow()
     if 'timestamp' in data and data['timestamp']:
         try:
-            # O ESP envia um Inteiro (segundos desde 1970). 
             ts = int(data['timestamp'])
-            # Convertemos para datetime UTC e removemos info de tz para o MySQL aceitar (naive)
             data_registro = datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
-            print(f"-> Registro Offline Detectado. Data convertida: {data_registro}")
         except ValueError:
-            print("-> Erro ao converter timestamp. Usando horário atual.")
-            pass # Mantém datetime.utcnow()
+            pass
 
-    # Cria o registro
     novo_registro = RegistroPonto(id_usuario=usuario.id, data_entrada=data_registro)
-
     try:
         db.session.add(novo_registro)
         db.session.commit()
@@ -170,9 +255,6 @@ def bater_ponto_entrada():
         db.session.rollback()
         return jsonify({"acao": "erro", "mensagem": f"Erro ao salvar no banco: {str(e)}"}), 500
 
-# =================================================================
-# ROTA DE SAÍDA (ATUALIZADA PARA TIMESTAMP OFFLINE)
-# =================================================================
 @app.route('/ponto/saida', methods=['POST'])
 def bater_ponto_saida():
     """
@@ -187,7 +269,6 @@ def bater_ponto_saida():
     if not usuario:
         return jsonify({"acao": "erro", "mensagem": "Cartão não cadastrado."}), 404
         
-    # Busca o último ponto aberto (o mais recente)
     registro_aberto = RegistroPonto.query.filter_by(
         id_usuario=usuario.id, 
         data_saida=None
@@ -196,24 +277,17 @@ def bater_ponto_saida():
     if not registro_aberto:
         return jsonify({"acao": "erro", "mensagem": "Nenhum ponto em aberto."}), 404
     
-    # --- LÓGICA DE TIMESTAMP (OFFLINE) ---
     data_registro = datetime.utcnow()
-
     if 'timestamp' in data and data['timestamp']:
         try:
             ts = int(data['timestamp'])
             data_registro = datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
-            print(f"-> Registro Offline Saída Detectado. Data: {data_registro}")
-            
-            # Validação Extra: A saída não pode ser menor que a entrada
             if data_registro < registro_aberto.data_entrada:
-                return jsonify({"acao": "erro", "mensagem": "Data de saída anterior à entrada! Verifique o relógio."}), 400
-                
+                return jsonify({"acao": "erro", "mensagem": "Data de saída anterior à entrada!"}), 400
         except ValueError:
             pass
 
     registro_aberto.data_saida = data_registro
-
     try:
         db.session.commit()
         return jsonify(registro_aberto.to_dict()), 200
@@ -221,20 +295,14 @@ def bater_ponto_saida():
         db.session.rollback()
         return jsonify({"acao": "erro", "mensagem": f"Erro ao atualizar no banco: {str(e)}"}), 500
 
-
 @app.route('/ponto/total/<string:card_uid>', methods=['GET'])
 def get_totais_por_usuario(card_uid):
-    # ... (MANTENHA SUA LÓGICA DE TOTAIS AQUI IGUAL AO CÓDIGO ORIGINAL) ...
-    # Estou omitindo para economizar espaço, pois não precisa mudar nada nela.
-    # Se quiser que eu repita, me avise.
     return calcular_totais(card_uid=card_uid)
 
 @app.route('/ponto/total/by-name/<string:nome>', methods=['GET'])
 def get_totais_by_name(nome):
-    # ... (MANTENHA SUA LÓGICA AQUI) ...
     return calcular_totais(nome=nome)
 
-# Função auxiliar para não duplicar código (Opcional, apenas sugestão de organização)
 def calcular_totais(card_uid=None, nome=None):
     if card_uid:
         usuario = Usuario.query.filter_by(card_uid=card_uid).first()
@@ -244,7 +312,6 @@ def calcular_totais(card_uid=None, nome=None):
     if not usuario:
         return jsonify({"mensagem": "Usuário não encontrado."}), 404
 
-    # Lógica de cálculo de data (baseada no fuso local BR_TZ)
     now_local = datetime.now(BR_TZ) 
     day_start_local = datetime(now_local.year, now_local.month, now_local.day, tzinfo=BR_TZ)
     day_end_local = day_start_local + timedelta(days=1)
@@ -256,7 +323,6 @@ def calcular_totais(card_uid=None, nome=None):
     else:
         month_end_local = datetime(now_local.year, now_local.month + 1, 1, tzinfo=BR_TZ)
     
-    # Busca registros no banco (que estão em UTC)
     registros = RegistroPonto.query.filter(
         RegistroPonto.id_usuario == usuario.id, 
         RegistroPonto.data_saida != None
@@ -280,7 +346,6 @@ def calcular_totais(card_uid=None, nome=None):
 
         dur_sec = (e_utc_aware - s_utc_aware).total_seconds()
         totals_sec['total'] += dur_sec
-        
         totals_sec['day'] += overlap_seconds(s_utc_aware, e_utc_aware, day_start_local, day_end_local)
         totals_sec['week'] += overlap_seconds(s_utc_aware, e_utc_aware, week_start_local, week_end_local)
         totals_sec['month'] += overlap_seconds(s_utc_aware, e_utc_aware, month_start_local, month_end_local)
@@ -316,5 +381,4 @@ def calcular_totais(card_uid=None, nome=None):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    # Host 0.0.0.0 permite que o ESP8266 acesse a API pela rede
     app.run(host='0.0.0.0', port=5000, debug=True)
