@@ -1,5 +1,5 @@
 // ======================================================================
-// LEITOR DE PONTO NFC - OFFLINE FIRST (COM TIMESTAMP)
+// LEITOR DE PONTO NFC - OFFLINE FIRST (RTC + LCD + LITTLEFS)
 // ======================================================================
 
 #include <ESP8266WiFi.h>
@@ -10,31 +10,31 @@
 #include <PN532_I2C.h>
 #include <PN532.h>
 #include <LittleFS.h>
-#include <time.h> // BIBLIOTECA DE TEMPO
+#include <time.h> 
+#include <RTClib.h> 
+#include <LiquidCrystal_I2C.h>
 
 // --- 1. Configurações de Rede ---
 const char* ssid = "Rede Maluso";
 const char* password = "malusomen";
 
 // --- 2. Configuração da API ---
-const char* serverAddress = "10.230.155.59";
+const char* serverAddress = "10.26.98.59";
 const int serverPort = 5000;
 
 // --- 3. Configurações de Tempo (NTP) ---
-// Fuso horário em segundos (GMT -3 para Ceará/Brasil = -10800)
-const long  gmtOffset_sec = -10800; 
-const int   daylightOffset_sec = 0; // Sem horário de verão
+const long  gmtOffset_sec = -10800;
+const int   daylightOffset_sec = 0;
 
 // --- 4. Configurações do Hardware ---
 PN532_I2C pn532i2c(Wire);
 PN532 nfc(pn532i2c);
+RTC_DS1307 rtc; 
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
 
-// Nome do arquivo onde salvaremos os pontos pendentes
 const char* FILE_PATH = "/fila_ponto.txt";
-
-// Controle de tempo
 unsigned long lastSyncAttempt = 0;
-const unsigned long syncInterval = 10000; 
+const unsigned long syncInterval = 10000;
 
 // Protótipos
 void connectToWiFi();
@@ -46,111 +46,117 @@ int enviarRequisicao(String endpoint, String cardUid, long timestamp);
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n[Leitor Ponto - Offline First] Iniciando...");
+  
+  Wire.begin();
+  
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Iniciando...");
 
   if (!LittleFS.begin()) {
-    Serial.println("ERRO: Falha ao montar LittleFS!");
+    Serial.println("ERRO: LittleFS!");
+    lcd.clear();
+    lcd.print("Erro LittleFS");
     return;
   }
+  
+  if (!rtc.begin()) {
+    Serial.println("ERRO: RTC!");
+  }
+  
+  // Ajusta o RTC caso esteja parado ou com data inválida
+  if (!rtc.isrunning() || rtc.now().year() < 2024) {
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
 
-  Wire.begin();
   nfc.begin();
-   
-  uint32_t versiondata = nfc.getFirmwareVersion();
-  if (!versiondata) {
-    Serial.println("ERRO: PN53x não encontrado!");
+  if (!nfc.getFirmwareVersion()) {
+    Serial.println("ERRO: PN53x!");
+    lcd.clear();
+    lcd.print("Erro NFC");
     while (1) { delay(10); }
   }
    
   nfc.setPassiveActivationRetries(0xFF);
   nfc.SAMConfig();
 
-  // Conecta e tenta pegar a hora
   connectToWiFi();
-
-  Serial.println("\n>>> SISTEMA PRONTO: Aproxime o cartão <<<");
+  lcd.clear();
 }
 
 void loop() {
-  handleCardRead();
+  // Exibe mensagem de espera
+  lcd.setCursor(0, 0);
+  lcd.print("Aproxime o card ");
+  
+  // Exibe relógio atualizado no LCD
+  DateTime agora = rtc.now();
+  char horaFormatada[17];
+  sprintf(horaFormatada, "%02d/%02d  %02d:%02d:%02d", agora.day(), agora.month(), agora.hour(), agora.minute(), agora.second());
+  lcd.setCursor(0, 1);
+  lcd.print(horaFormatada);
 
-  // Sincronização em Background
+  handleCardRead();
+  
   if (WiFi.status() == WL_CONNECTED && (millis() - lastSyncAttempt > syncInterval)) {
     processarFilaOffline();
     lastSyncAttempt = millis();
   }
-   
   delay(50);
 }
 
 void handleCardRead() {
   boolean success;
-  uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };    
-  uint8_t uidLength;                        
+  uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };   
+  uint8_t uidLength;                       
     
   success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, &uid[0], &uidLength, 50);
-    
+  
   if (success) {
-    Serial.println("\n--- Cartão Detectado ---");
-     
+    lcd.clear();
+    lcd.print("Lendo...");
+
     String cardUid = "";
     for (byte i = 0; i < uidLength; i ++) {
       cardUid += (uid[i] < 0x10 ? "0" : "");
-      cardUid += String(uid[i], HEX); 
+      cardUid += String(uid[i], HEX);
     }
     cardUid.toUpperCase();
     
-    // CAPTURA A HORA ATUAL
-    time_t now = time(nullptr);
-    Serial.print("UID: "); Serial.println(cardUid);
-    Serial.print("Timestamp (Unix): "); Serial.println(now);
+    time_t now = rtc.now().unixtime();
+    
+    lcd.setCursor(0, 0);
+    lcd.print("ID Detectado:");
+    lcd.setCursor(0, 1);
+    lcd.print(cardUid);
 
-    // Verifica se a hora é válida (maior que ano 2020)
-    // Se for < 1600000000, provavelmente o relógio não sincronizou (está em 1970)
-    if (now < 100000) {
-        Serial.println("ALERTA: Relógio do sistema desatualizado! Salvando sem hora precisa.");
-    }
-
-    // SALVA OFFLINE COM O TIMESTAMP
     salvarOffline(cardUid, now);
-     
-    Serial.println("STATUS: Salvo na memória.");
-     
+    
+    // Espera 2 segundos para o usuário ver o ID no visor
+    delay(2000); 
+    
+    // Aguarda o cartão ser removido
     while (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, &uid[0], &uidLength, 50)) {
         delay(100);
     }
-    Serial.println("--- Fim da Leitura ---\n");
+    lcd.clear();
   }
 }
 
-/*
- * Salva UID e Timestamp separados por ";"
- * Exemplo no arquivo: F432A1;1701234567
- */
 void salvarOffline(String cardUid, time_t timestamp) {
-  File file = LittleFS.open(FILE_PATH, "a"); 
-  if (!file) {
-    Serial.println("ERRO CRÍTICO: Falha ao abrir arquivo!");
-  } else {
-    // Formato CSV simples: UID;TIMESTAMP
+  File file = LittleFS.open(FILE_PATH, "a");
+  if (file) {
     file.print(cardUid);
     file.print(";");
     file.println(timestamp); 
     file.close();
-    Serial.println(">> Ponto armazenado na fila (LittleFS).");
+    Serial.println("Ponto salvo offline.");
   }
 }
 
-/*
- * Processa o arquivo linha por linha, separando UID e Hora
- */
-/*
- * Lê o arquivo, tenta enviar linha por linha e limpa o que foi enviado.
- * CORREÇÃO: Ajuste na exibição da data no Serial.
- */
 void processarFilaOffline() {
-  if (!LittleFS.exists(FILE_PATH)) return; 
-
+  if (!LittleFS.exists(FILE_PATH)) return;
   File file = LittleFS.open(FILE_PATH, "r");
   if (!file) return;
 
@@ -160,8 +166,6 @@ void processarFilaOffline() {
     return;
   }
 
-  Serial.println("\nIniciando sincronização...");
-
   String pendingData = "";
   while (file.available()) {
     pendingData += (char)file.read();
@@ -170,8 +174,8 @@ void processarFilaOffline() {
 
   String remainingData = ""; 
   int processedCount = 0;
-  
   int strIndex = 0;
+
   while (strIndex < pendingData.length()) {
     int endIndex = pendingData.indexOf('\n', strIndex);
     if (endIndex == -1) endIndex = pendingData.length();
@@ -180,78 +184,46 @@ void processarFilaOffline() {
     line.trim();
     
     if (line.length() > 0) {
-      int separatorIndex = line.indexOf(';');
-      
+      int sep = line.indexOf(';');
       String lineUID = "";
-      long rawTimestamp = 0; // Mantemos como long (ou int32) para ler do arquivo
+      long rawTs = 0;
 
-      if (separatorIndex != -1) {
-          lineUID = line.substring(0, separatorIndex);
-          // Lê o número como long
-          rawTimestamp = line.substring(separatorIndex + 1).toInt();
+      if (sep != -1) {
+          lineUID = line.substring(0, sep);
+          rawTs = line.substring(sep + 1).toInt();
       } else {
           lineUID = line;
       }
 
-      Serial.print("Enviando UID: "); Serial.print(lineUID);
-      
-      // --- CORREÇÃO AQUI ---
-      // Criamos uma variável time_t real e atribuímos o valor do long a ela
-      time_t correctTime = (time_t)rawTimestamp; 
-      Serial.print(" | Data: "); Serial.print(ctime(&correctTime)); 
-      // ---------------------
-      
-      bool sentSuccess = false;
-      // Passamos o rawTimestamp original para a função de envio
-      int result = enviarRequisicaoLogicaCompleta(lineUID, rawTimestamp);
-      
+      int result = enviarRequisicaoLogicaCompleta(lineUID, rawTs);
       if (result != -1) {
-        sentSuccess = true;
         processedCount++;
-      }
-      
-      if (!sentSuccess) {
-        Serial.println("Falha de rede. Mantendo na fila.");
+      } else {
         remainingData += line + "\n";
       }
     }
-    
     strIndex = endIndex + 1;
   }
 
   if (processedCount > 0) {
     if (remainingData.length() == 0) {
-      LittleFS.remove(FILE_PATH); 
-      Serial.println("Todos os pontos enviados com sucesso!");
+      LittleFS.remove(FILE_PATH);
     } else {
       File fileWrite = LittleFS.open(FILE_PATH, "w"); 
       fileWrite.print(remainingData);
       fileWrite.close();
-      Serial.print("Sincronização parcial. Pontos restantes salvos.");
     }
-  } else {
-     Serial.println("Nenhuma conexão estabelecida nesta tentativa.");
   }
 }
 
 int enviarRequisicaoLogicaCompleta(String cardUid, long timestamp) {
   int httpCode = enviarRequisicao("/ponto/entrada", cardUid, timestamp);
-
-  if (httpCode == 201) {
-    Serial.println("   -> Entrada registrada (API).");
-    return 201;
-  } 
-   
+  if (httpCode == 201) return 201;
+  
   if (httpCode == 400) {
-    Serial.println("   -> Tentando Saída...");
     int httpCodeSaida = enviarRequisicao("/ponto/saida", cardUid, timestamp);
-    if (httpCodeSaida == 200) {
-      Serial.println("   -> Saída registrada (API).");
-      return 200;
-    }
-    return httpCodeSaida;
+    if (httpCodeSaida == 200) return 200;
   }
-
   return httpCode;
 }
 
@@ -259,59 +231,36 @@ int enviarRequisicao(String endpoint, String cardUid, long timestamp) {
   WiFiClient client;
   HTTPClient http;
   String url = "http://" + String(serverAddress) + ":" + String(serverPort) + endpoint;
-
+  
   if (http.begin(client, url)) {
     http.addHeader("Content-Type", "application/json");
-    
-    StaticJsonDocument<200> jsonDoc;
-    jsonDoc["card_uid"] = cardUid;
-    jsonDoc["timestamp"] = timestamp; // Envia o Unix Timestamp (Int)
-
-    String jsonPayload;
-    serializeJson(jsonDoc, jsonPayload);
-
-    int httpCode = http.POST(jsonPayload);
+    StaticJsonDocument<200> doc;
+    doc["card_uid"] = cardUid;
+    doc["timestamp"] = timestamp;
+    String payload;
+    serializeJson(doc, payload);
+    int code = http.POST(payload);
     http.end();
-    return httpCode; 
-  } else {
-    return -1; 
+    return code;
   }
+  return -1;
 }
 
 void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
-   
-  Serial.print("Conectando WiFi: "); Serial.println(ssid);
   WiFi.begin(ssid, password);
-   
   int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 15) { // Aumentei um pouco o tempo
-    delay(500);
-    Serial.print(".");
-    retries++;
+  while (WiFi.status() != WL_CONNECTED && retries < 15) { 
+    delay(500); retries++;
   }
-  
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi Conectado!");
-    Serial.println(WiFi.localIP());
-    
-    // INICIA E SINCRONIZA O TEMPO (NTP)
-    Serial.println("Sincronizando relógio NTP...");
     configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
-    
-    // Aguarda um pouco para sincronizar
     time_t now = time(nullptr);
-    int retryTime = 0;
-    while (now < 100000 && retryTime < 5) {
-        delay(500);
-        Serial.print(".");
-        now = time(nullptr);
-        retryTime++;
+    int r = 0;
+    while (now < 100000 && r < 10) { delay(500); now = time(nullptr); r++; }
+    if (now > 100000) {
+      struct tm * ti = localtime(&now);
+      rtc.adjust(DateTime(ti->tm_year + 1900, ti->tm_mon + 1, ti->tm_mday, ti->tm_hour, ti->tm_min, ti->tm_sec));
     }
-    Serial.println("\nRelógio sincronizado!");
-    Serial.println(ctime(&now));
-
-  } else {
-    Serial.println("\nWiFi não conectado (Relógio pode estar incorreto).");
   }
 }
