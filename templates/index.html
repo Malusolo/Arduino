@@ -67,7 +67,7 @@
         .user-link:hover { text-decoration: underline; }
 
         /* Botões Especiais */
-        .btn-action { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 0.8rem; font-weight: 600; margin-right: 5px; }
+        .btn-action { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 0.8rem; font-weight: 600; margin-right: 5px; transition: 0.2s; }
         .btn-view { background: #e0f2fe; color: #0369a1; }
         .btn-view:hover { background: #bae6fd; }
         .btn-delete { background: #fee2e2; color: #b91c1c; }
@@ -78,9 +78,13 @@
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; margin-bottom: 8px; font-weight: 600; color: var(--text); }
         .form-group input { width: 100%; padding: 12px; font-size: 1rem; }
-        .btn-submit { width: 100%; background: var(--success); color: white; border: none; padding: 12px; border-radius: 6px; font-size: 1rem; font-weight: bold; cursor: pointer; }
+        .btn-submit { width: 100%; background: var(--success); color: white; border: none; padding: 12px; border-radius: 6px; font-size: 1rem; font-weight: bold; cursor: pointer; transition: 0.2s; }
         .btn-submit:hover { background: #059669; }
+        .btn-submit:disabled { background: #9ca3af; cursor: not-allowed; }
         #msg-cadastro { margin-top: 15px; text-align: center; font-weight: 500; min-height: 24px; }
+        #btn-ouvir-leitor { width: auto !important; padding: 12px 20px !important; background: var(--primary) !important; font-size: 0.9rem !important; }
+        #btn-ouvir-leitor:hover { background: var(--primary-dark) !important; }
+        #btn-ouvir-leitor:disabled { background: #9ca3af !important; }
 
         /* MODAL */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
@@ -91,6 +95,46 @@
         .stat-box { background: #f8fafc; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e2e8f0; }
         .stat-box h3 { font-size: 0.8rem; color: #64748b; text-transform: uppercase; }
         .stat-box p { font-size: 1.2rem; font-weight: bold; color: #0f172a; }
+
+        /* HEADER - Ajustes para login */
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .user-info {
+            font-size: 0.9rem;
+            color: var(--text-light);
+        }
+
+        .badge-admin {
+            background: var(--primary);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .btn-logout {
+            padding: 8px 16px;
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+
+        .btn-logout:hover {
+            background: #b91c1c;
+        }
+
+        .hidden {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
@@ -98,13 +142,21 @@
 <div class="container">
     <header>
         <h1>⏰ Sistema de Ponto</h1>
-        <button class="refresh-btn" onclick="atualizarTudo()">Atualizar Dados</button>
+        <div class="header-right">
+            <div class="user-info">
+                <span id="userType">Visitante</span>
+                <span id="adminBadge" class="badge-admin" style="display: none; margin-left: 8px;">Admin</span>
+            </div>
+            <button class="refresh-btn" onclick="atualizarTudo()">Atualizar Dados</button>
+            <button class="btn-logout" onclick="fazerLogout()">Sair</button>
+        </div>
     </header>
 
     <div class="tabs">
         <button class="tab-btn active" onclick="abrirAba('historico')">Histórico Diário</button>
-        <button class="tab-btn" onclick="abrirAba('funcionarios')">Lista de Funcionários</button>
-        <button class="tab-btn" onclick="abrirAba('cadastro')">Novo Cadastro ➕</button>
+        <button class="tab-btn" onclick="abrirAba('funcionarios')">Lista de Voluntários</button>
+        <button class="tab-btn admin-only hidden" onclick="abrirAba('cadastro')">Novo Cadastro ➕</button>
+        <button class="tab-btn admin-only hidden" onclick="abrirAba('admin')">Admin 🔧</button>
     </div>
 
     <!-- CONTEÚDO 1: HISTÓRICO -->
@@ -145,6 +197,25 @@
             <div class="filters">
                 <input type="text" id="buscaFuncionario" placeholder="Filtrar nome..." onkeyup="filtrarFuncionarios()">
             </div>
+            
+            <!-- Seção de Pontos em Aberto (só para admin) -->
+            <div id="secao-pontos-abertos" style="display: none; margin-bottom: 30px;">
+                <h3 style="color: var(--danger); margin-bottom: 15px;">⚠️ Pontos em Aberto</h3>
+                <div class="table-container" style="background: #fef2f2; border: 1px solid #fecaca;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Entrada</th>
+                                <th>Tempo Aberto</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabela-pontos-abertos"></tbody>
+                    </table>
+                </div>
+            </div>
+            
             <table>
                 <thead>
                     <tr>
@@ -161,18 +232,78 @@
     <!-- CONTEÚDO 3: CADASTRO -->
     <div id="tab-cadastro" class="tab-content">
         <div class="form-card">
-            <h2 style="margin-bottom: 20px; color: var(--primary);">Cadastrar Novo Funcionário</h2>
+            <h2 style="margin-bottom: 20px; color: var(--primary);">Cadastrar Novo Voluntário</h2>
             <div class="form-group">
                 <label for="novoNome">Nome Completo</label>
                 <input type="text" id="novoNome" placeholder="Ex: João da Silva">
             </div>
             <div class="form-group">
                 <label for="novoUID">UID do Cartão (código hexadecimal)</label>
-                <input type="text" id="novoUID" placeholder="Ex: D3F4A120">
-                <small style="color: #666; font-size: 0.8rem;">Veja o código no Monitor Serial do Arduino.</small>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="novoUID" placeholder="Ex: D3F4A120" style="flex: 1;">
+                    <button type="button" class="btn-submit" id="btn-ouvir-leitor" onclick="iniciarOuvidorLeitor()" style="width: auto; padding: 12px 20px; background: var(--primary);">
+                        🎧 Ouvir Leitor
+                    </button>
+                </div>
+                <small style="color: #666; font-size: 0.8rem;">Clique no botão e passe o cartão no leitor RFID para capturar automaticamente.</small>
             </div>
-            <button class="btn-submit" onclick="realizarCadastro()">Salvar Funcionário</button>
+            <div id="status-ouvidor" style="padding: 10px; margin-bottom: 15px; border-radius: 6px; display: none; text-align: center; font-weight: 600;"></div>
+            <button class="btn-submit" onclick="realizarCadastro()">Salvar Voluntário</button>
             <div id="msg-cadastro"></div>
+        </div>
+    </div>
+
+    <!-- CONTEÚDO 4: ADMIN -->
+    <div id="tab-admin" class="tab-content">
+        <div class="table-container">
+            <h2 style="margin-bottom: 20px; color: var(--primary);">⚙️ Modo de Administração</h2>
+            
+            <!-- Sub-tabs Admin -->
+            <div class="tabs" style="margin-bottom: 20px;">
+                <button class="tab-btn active" onclick="abrirSubAba('admin-usuarios')" style="font-size: 0.9rem;">👤 Editar Usuários</button>
+                <button class="tab-btn" onclick="abrirSubAba('admin-registros')" style="font-size: 0.9rem;">📝 Editar Registros</button>
+            </div>
+
+            <!-- Sub-aba: Editar Usuários -->
+            <div id="admin-usuarios" class="tab-content active">
+                <div class="filters" style="margin-bottom: 20px;">
+                    <input type="text" id="filtroAdminUsuarios" placeholder="Filtrar usuários..." onkeyup="filtrarAdminUsuarios()">
+                    <button class="refresh-btn" onclick="carregarAdminUsuarios()" style="background: var(--primary);">🔄 Recarregar</button>
+                    <button class="refresh-btn" onclick="exportarDadosJSON()" style="background: #10b981;">📤 Exportar JSON</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Nome</th>
+                            <th>Cartão (UID)</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-admin-usuarios"></tbody>
+                </table>
+            </div>
+
+            <!-- Sub-aba: Editar Registros -->
+            <div id="admin-registros" class="tab-content">
+                <div class="filters" style="margin-bottom: 20px;">
+                    <input type="date" id="filtroAdminData" onchange="carregarAdminRegistros()" value="">
+                    <button class="refresh-btn" onclick="carregarAdminRegistros()">🔄 Recarregar</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Usuário</th>
+                            <th>Entrada</th>
+                            <th>Saída</th>
+                            <th>Duração</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabela-admin-registros"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -192,17 +323,99 @@
     </div>
 </div>
 
+<!-- MODAL EDITAR USUÁRIO (ADMIN) -->
+<div id="modal-editar-usuario" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="fecharModalEditarUsuario()">&times;</span>
+        <h2 style="color: var(--primary); margin-bottom: 20px;">✏️ Editar Usuário</h2>
+        <div class="form-group">
+            <label for="edit-usuario-id">ID:</label>
+            <input type="text" id="edit-usuario-id" readonly style="background: #f3f4f6;">
+        </div>
+        <div class="form-group">
+            <label for="edit-usuario-nome">Nome:</label>
+            <input type="text" id="edit-usuario-nome" placeholder="Novo nome">
+        </div>
+        <div class="form-group">
+            <label for="edit-usuario-uid">Cartão (UID):</label>
+            <input type="text" id="edit-usuario-uid" readonly style="background: #f3f4f6;">
+        </div>
+        <button class="btn-submit" onclick="salvarEdicaoUsuario()" style="background: var(--primary);">💾 Salvar Alterações</button>
+        <div id="msg-edit-usuario" style="margin-top: 15px; text-align: center; font-weight: 500;"></div>
+    </div>
+</div>
+
+<!-- MODAL EDITAR PONTO (ADMIN) -->
+<div id="modal-editar-ponto" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="fecharModalEditarPonto()">&times;</span>
+        <h2 style="color: var(--primary); margin-bottom: 20px;">✏️ Editar Registro de Ponto</h2>
+        <input type="hidden" id="edit-ponto-id">
+        <div class="form-group">
+            <label for="edit-ponto-usuario">Usuário:</label>
+            <input type="text" id="edit-ponto-usuario" readonly style="background: #f3f4f6;">
+        </div>
+        <div class="form-group">
+            <label for="edit-ponto-entrada">Hora de Entrada:</label>
+            <input type="datetime-local" id="edit-ponto-entrada">
+        </div>
+        <div class="form-group">
+            <label for="edit-ponto-saida">Hora de Saída:</label>
+            <input type="datetime-local" id="edit-ponto-saida">
+        </div>
+        <button class="btn-submit" onclick="salvarEdicaoPonto()" style="background: var(--primary);">💾 Salvar Alterações</button>
+        <div id="msg-edit-ponto" style="margin-top: 15px; text-align: center; font-weight: 500;"></div>
+    </div>
+</div>
+
 <script>
     document.getElementById('buscaData').valueAsDate = new Date();
 
     function abrirAba(nome) {
+        // Verifica se é uma aba admin-only
+        const btns = document.querySelectorAll('.tab-btn');
+        let btnIndex = -1;
+        
+        if(nome === 'historico') btnIndex = 0;
+        if(nome === 'funcionarios') btnIndex = 1;
+        if(nome === 'cadastro') btnIndex = 2;
+        if(nome === 'admin') btnIndex = 3;
+
+        if (btnIndex >= 0 && btnIndex < btns.length) {
+            const btn = btns[btnIndex];
+            if (btn.classList.contains('admin-only') && !isAdmin) {
+                alert('Acesso restrito a administradores');
+                return;
+            }
+        }
+
         document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
         document.getElementById(`tab-${nome}`).classList.add('active');
-        const btns = document.querySelectorAll('.tab-btn');
-        if(nome === 'historico') btns[0].classList.add('active');
-        if(nome === 'funcionarios') btns[1].classList.add('active');
-        if(nome === 'cadastro') btns[2].classList.add('active');
+        if(btnIndex >= 0 && btnIndex < btns.length) {
+            btns[btnIndex].classList.add('active');
+        }
+        
+        // Se for admin, carrega os dados
+        if(nome === 'admin') {
+            carregarAdminUsuarios();
+            document.getElementById('filtroAdminData').valueAsDate = new Date();
+            carregarAdminRegistros();
+        }
+        
+        // Carrega dados da aba específica
+        if(nome === 'funcionarios') {
+            carregarFuncionarios();
+        }
+    }
+
+    function abrirSubAba(nome) {
+        document.querySelectorAll('#tab-admin .tab-content').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('#tab-admin .tab-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(nome).classList.add('active');
+        const btns = document.querySelectorAll('#tab-admin .tab-btn');
+        if(nome === 'admin-usuarios') btns[0].classList.add('active');
+        if(nome === 'admin-registros') btns[1].classList.add('active');
     }
 
     function atualizarTudo() {
@@ -226,8 +439,10 @@
             }
 
             dados.forEach(reg => {
-                const entrada = new Date(reg.entrada).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
-                const saida = reg.saida ? new Date(reg.saida).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}) : '--:--';
+                // extract HH:MM directly from the ISO timestamp (ignore JS timezone conversions)
+                // JSON includes "-03:00" offset so time portion is already local Brazilian time
+                const entrada = reg.entrada ? reg.entrada.substr(11,5) : '--:--';
+                const saida = reg.saida ? reg.saida.substr(11,5) : '--:--';
                 let status = reg.saida ? '<span class="badge badge-closed">Fechado</span>' : '<span class="badge badge-open">Aberto</span>';
                 if(!reg.saida) presentes++;
                 const link = `<a href="#" class="user-link" onclick="abrirModal('${reg.usuario_nome}')">${reg.usuario_nome}</a>`;
@@ -269,12 +484,65 @@
                         <td style="color:#666; font-family:monospace">${u.card_uid}</td>
                         <td>
                             <button class="btn-action btn-view" onclick="abrirModal('${u.nome}')">Ver Horas</button>
-                            <button class="btn-action btn-delete" onclick="excluirUsuario(${u.id}, '${u.nome}')">Excluir</button>
                         </td>
                     </tr>
                 `;
             });
         } catch (e) { console.error(e); }
+    }
+
+    async function carregarPontosAbertos() {
+        const tbody = document.getElementById('tabela-pontos-abertos');
+        const secao = document.getElementById('secao-pontos-abertos');
+        
+        try {
+            const res = await fetch('/api/usuarios/pontos-abertos');
+            const usuariosComAbertos = await res.json();
+            
+            // Para debug: sempre mostrar a seção se for admin
+            if (isAdmin) {
+                secao.style.display = 'block';
+                if (usuariosComAbertos.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#666;">Nenhum ponto em aberto no momento.</td></tr>';
+                    return;
+                }
+            } else {
+                secao.style.display = 'none';
+                return;
+            }
+            
+            tbody.innerHTML = '';
+            
+            usuariosComAbertos.forEach(u => {
+                const entrada = u.ponto_aberto.data_entrada;
+                const entradaFormatada = entrada ? new Date(entrada).toLocaleString('pt-BR') : 'N/A';
+                
+                // Calcular tempo aberto
+                const agora = new Date();
+                const entradaDate = new Date(entrada);
+                const diffMs = agora - entradaDate;
+                const diffHoras = Math.floor(diffMs / (1000 * 60 * 60));
+                const diffMinutos = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+                const tempoAberto = `${diffHoras}h ${diffMinutos}m`;
+                
+                tbody.innerHTML += `
+                    <tr>
+                        <td style="font-weight:bold; color: var(--danger);">${u.nome}</td>
+                        <td>${entradaFormatada}</td>
+                        <td style="color: var(--danger); font-weight: bold;">${tempoAberto}</td>
+                        <td>
+                            <button class="btn-action btn-view" onclick="abrirModal('${u.nome}')">Ver Detalhes</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        } catch (e) {
+            console.error('Erro ao carregar pontos em aberto:', e);
+            if (isAdmin) {
+                secao.style.display = 'block';
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#f00;">Erro ao carregar dados.</td></tr>';
+            }
+        }
     }
 
     // --- NOVA FUNÇÃO DE EXCLUSÃO ---
@@ -288,6 +556,7 @@
             if (response.ok) {
                 alert('Usuário excluído com sucesso.');
                 carregarFuncionarios();
+                carregarAdminUsuarios(); // Recarregar também a tabela admin
             } else {
                 alert('Erro ao excluir usuário.');
             }
@@ -305,11 +574,78 @@
         });
     }
 
+    // --- FUNÇÃO PARA OUVIR LEITOR RFID ---
+    let ouvidorAtivo = false;
+    let intervaloOuvidor = null;
+
+    async function iniciarOuvidorLeitor() {
+        if (ouvidorAtivo) {
+            pararOuvidorLeitor();
+            return;
+        }
+
+        ouvidorAtivo = true;
+        const btn = document.getElementById('btn-ouvir-leitor');
+        const status = document.getElementById('status-ouvidor');
+        
+        btn.style.background = 'var(--danger)';
+        btn.innerText = '⏹️ Parar Escuta';
+        status.style.display = 'block';
+        status.style.background = '#fef3c7';
+        status.style.color = '#92400e';
+        status.innerText = '🔴 Aguardando cartão...';
+
+        // Polling a cada 500ms para capturar o último cartão lido
+        intervaloOuvidor = setInterval(async () => {
+            try {
+                const res = await fetch('/api/get-ultimo-cartao');
+                const data = await res.json();
+                
+                if (data.card_uid && data.card_uid !== null) {
+                    // Cartão capturado com sucesso
+                    document.getElementById('novoUID').value = data.card_uid.toUpperCase();
+                    
+                    status.style.background = '#d1fae5';
+                    status.style.color = '#065f46';
+                    status.innerText = `✅ Cartão capturado: ${data.card_uid.toUpperCase()}`;
+                    
+                    pararOuvidorLeitor();
+                }
+            } catch (error) {
+                console.error('Erro ao capturar cartão:', error);
+            }
+        }, 500);
+
+        // Timeout de 30 segundos para auto-desativar
+        setTimeout(() => {
+            if (ouvidorAtivo) {
+                status.style.background = '#fee2e2';
+                status.style.color = '#b91c1c';
+                status.innerText = '❌ Timeout: nenhum cartão lido.';
+                pararOuvidorLeitor();
+            }
+        }, 30000);
+    }
+
+    function pararOuvidorLeitor() {
+        ouvidorAtivo = false;
+        if (intervaloOuvidor) {
+            clearInterval(intervaloOuvidor);
+            intervaloOuvidor = null;
+        }
+        
+        const btn = document.getElementById('btn-ouvir-leitor');
+        btn.style.background = 'var(--primary)';
+        btn.innerText = '🎧 Ouvir Leitor';
+    }
+
     async function realizarCadastro() {
+        pararOuvidorLeitor(); // Para o ouvidor se estiver ativo
+        
         const nomeInput = document.getElementById('novoNome');
         const uidInput = document.getElementById('novoUID');
         const msgDiv = document.getElementById('msg-cadastro');
-        const btn = document.querySelector('.btn-submit');
+        const btn = document.querySelector('.btn-submit:not(#btn-ouvir-leitor)');
         const nome = nomeInput.value.trim();
         const uid = uidInput.value.trim().toUpperCase();
 
@@ -348,7 +684,7 @@
             msgDiv.innerText = 'Erro ao conectar com o servidor.';
         } finally {
             btn.disabled = false;
-            btn.innerText = 'Salvar Funcionário';
+            btn.innerText = 'Salvar Voluntário';
         }
     }
 
@@ -375,7 +711,283 @@
     function fecharModal() { document.getElementById('modal-totais').classList.remove('modal-active'); }
     window.onclick = e => { if(e.target == document.getElementById('modal-totais')) fecharModal(); }
 
-    atualizarTudo();
+    // --- FUNÇÕES ADMIN ---
+
+    async function carregarAdminUsuarios() {
+        const tbody = document.getElementById('tabela-admin-usuarios');
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center">Carregando...</td></tr>';
+        try {
+            const res = await fetch('/api/usuarios');
+            const usuarios = await res.json();
+            tbody.innerHTML = '';
+            
+            if(usuarios.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center">Nenhum usuário cadastrado.</td></tr>';
+                return;
+            }
+
+            usuarios.forEach(u => {
+                tbody.innerHTML += `
+                    <tr>
+                        <td style="font-weight:bold">${u.id}</td>
+                        <td>${u.nome}</td>
+                        <td style="color:#666; font-family:monospace;">${u.card_uid}</td>
+                        <td>
+                            <button class="btn-action btn-view" onclick="abrirModalEditarUsuario(${u.id}, '${u.nome}', '${u.card_uid}')">✏️ Editar</button>
+                            <button class="btn-action btn-delete" onclick="excluirUsuario(${u.id}, '${u.nome}')">🗑️ Excluir</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        } catch (e) {
+            console.error(e);
+            tbody.innerHTML = '<tr><td colspan="4">Erro ao carregar usuários.</td></tr>';
+        }
+    }
+
+    function filtrarAdminUsuarios() {
+        const termo = document.getElementById('filtroAdminUsuarios').value.toLowerCase();
+        const linhas = document.querySelectorAll('#tabela-admin-usuarios tr');
+        linhas.forEach(l => {
+            const txt = l.innerText.toLowerCase();
+            l.style.display = txt.includes(termo) ? '' : 'none';
+        });
+    }
+
+    function abrirModalEditarUsuario(id, nome, uid) {
+        document.getElementById('modal-editar-usuario').classList.add('modal-active');
+        document.getElementById('edit-usuario-id').value = id;
+        document.getElementById('edit-usuario-nome').value = nome;
+        document.getElementById('edit-usuario-uid').value = uid;
+        document.getElementById('msg-edit-usuario').innerHTML = '';
+    }
+
+    function fecharModalEditarUsuario() {
+        document.getElementById('modal-editar-usuario').classList.remove('modal-active');
+    }
+
+    async function salvarEdicaoUsuario() {
+        const id = document.getElementById('edit-usuario-id').value;
+        const novoNome = document.getElementById('edit-usuario-nome').value.trim();
+        const msg = document.getElementById('msg-edit-usuario');
+        
+        if (!novoNome) {
+            msg.style.color = 'var(--danger)';
+            msg.innerHTML = '❌ Nome não pode estar vazio.';
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/usuarios/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nome: novoNome })
+            });
+            const result = await response.json();
+
+            if (response.ok) {
+                msg.style.color = 'var(--success)';
+                msg.innerHTML = '✅ ' + result.mensagem;
+                setTimeout(() => {
+                    fecharModalEditarUsuario();
+                    carregarAdminUsuarios();
+                }, 1500);
+            } else {
+                msg.style.color = 'var(--danger)';
+                msg.innerHTML = '❌ ' + result.mensagem;
+            }
+        } catch (error) {
+            msg.style.color = 'var(--danger)';
+            msg.innerHTML = '❌ Erro ao conectar com servidor.';
+        }
+    }
+
+    async function carregarAdminRegistros() {
+        const data = document.getElementById('filtroAdminData').value;
+        const tbody = document.getElementById('tabela-admin-registros');
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center">Carregando...</td></tr>';
+
+        try {
+            const res = await fetch(`/api/historico?data=${data}`);
+            const registros = await res.json();
+            tbody.innerHTML = '';
+            
+            if(registros.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center">Nenhum registro nesta data.</td></tr>';
+                return;
+            }
+
+            registros.forEach(r => {
+                const entrada = r.entrada ? r.entrada.substr(0, 16) : '--:--';
+                const saida = r.saida ? r.saida.substr(0, 16) : '--:--';
+                tbody.innerHTML += `
+                    <tr>
+                        <td style="font-weight:bold">${r.id}</td>
+                        <td>${r.usuario_nome}</td>
+                        <td>${entrada}</td>
+                        <td>${saida}</td>
+                        <td>${r.duracao || '...'}</td>
+                        <td>
+                            <button class="btn-action btn-view" onclick="abrirModalEditarPonto(${r.id}, '${r.usuario_nome}', '${r.entrada}', '${r.saida}')">✏️ Editar</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        } catch (e) {
+            console.error(e);
+            tbody.innerHTML = '<tr><td colspan="6">Erro ao carregar registros.</td></tr>';
+        }
+    }
+
+    function abrirModalEditarPonto(id, usuario, entrada, saida) {
+        document.getElementById('modal-editar-ponto').classList.add('modal-active');
+        document.getElementById('edit-ponto-id').value = id;
+        document.getElementById('edit-ponto-usuario').value = usuario;
+        
+        // Converter de ISO para datetime-local format (YYYY-MM-DDTHH:MM)
+        if (entrada) {
+            const dt = entrada.substr(0, 16); // "2024-01-15T14:30"
+            document.getElementById('edit-ponto-entrada').value = dt;
+        }
+        if (saida) {
+            const dt = saida.substr(0, 16);
+            document.getElementById('edit-ponto-saida').value = dt;
+        }
+        document.getElementById('msg-edit-ponto').innerHTML = '';
+    }
+
+    function fecharModalEditarPonto() {
+        document.getElementById('modal-editar-ponto').classList.remove('modal-active');
+    }
+
+    async function salvarEdicaoPonto() {
+        const id = document.getElementById('edit-ponto-id').value;
+        const entrada = document.getElementById('edit-ponto-entrada').value;
+        const saida = document.getElementById('edit-ponto-saida').value;
+        const msg = document.getElementById('msg-edit-ponto');
+
+        if (!entrada) {
+            msg.style.color = 'var(--danger)';
+            msg.innerHTML = '❌ Hora de entrada é obrigatória.';
+            return;
+        }
+
+        try {
+            // Converte datetime-local para ISO format com segundos
+            const entradaISO = entrada + ':00';
+            const saidaISO = saida ? saida + ':00' : null;
+
+            const response = await fetch(`/api/historico/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    entrada: entradaISO,
+                    saida: saidaISO
+                })
+            });
+            const result = await response.json();
+
+            if (response.ok) {
+                msg.style.color = 'var(--success)';
+                msg.innerHTML = '✅ ' + result.mensagem;
+                setTimeout(() => {
+                    fecharModalEditarPonto();
+                    carregarAdminRegistros();
+                }, 1500);
+            } else {
+                msg.style.color = 'var(--danger)';
+                msg.innerHTML = '❌ ' + result.mensagem;
+            }
+        } catch (error) {
+            console.error(error);
+            msg.style.color = 'var(--danger)';
+            msg.innerHTML = '❌ Erro ao conectar com servidor.';
+        }
+    }
+
+    window.onclick = e => { 
+        if(e.target == document.getElementById('modal-totais')) fecharModal();
+        if(e.target == document.getElementById('modal-editar-usuario')) fecharModalEditarUsuario();
+        if(e.target == document.getElementById('modal-editar-ponto')) fecharModalEditarPonto();
+    }
+
+    // ========== CONTROLE DE ACESSO ==========
+    let isAdmin = false;
+
+    async function verificarAutenticacao() {
+        try {
+            const response = await fetch('/api/check-auth');
+            const data = await response.json();
+
+            if (!data.autenticado) {
+                window.location.href = '/login';
+                return;
+            }
+
+            isAdmin = data.is_admin;
+            console.log('isAdmin definido como:', isAdmin); // Debug
+
+            // Atualiza a UI baseado no tipo de usuário
+            const userType = document.getElementById('userType');
+            const adminBadge = document.getElementById('adminBadge');
+            const adminOnlyElements = document.querySelectorAll('.admin-only');
+
+            if (isAdmin) {
+                userType.textContent = 'Administrador';
+                adminBadge.style.display = 'inline-block';
+                adminOnlyElements.forEach(el => el.classList.remove('hidden'));
+                
+                // Carregar pontos em aberto após confirmar que é admin
+                carregarPontosAbertos();
+            } else {
+                userType.textContent = 'Visitante';
+                adminBadge.style.display = 'none';
+                adminOnlyElements.forEach(el => el.classList.add('hidden'));
+            }
+        } catch (error) {
+            console.error('Erro ao verificar autenticação:', error);
+            window.location.href = '/login';
+        }
+    }
+
+    async function fazerLogout() {
+        try {
+            await fetch('/api/logout', { method: 'POST' });
+            window.location.href = '/login';
+        } catch (error) {
+            console.error('Erro ao fazer logout:', error);
+        }
+    }
+
+    async function exportarDadosJSON() {
+        try {
+            const response = await fetch('/api/export/json');
+            if (!response.ok) {
+                throw new Error('Falha ao gerar exportação');
+            }
+            const data = await response.json();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `export-dados-${new Date().toISOString().slice(0,10)}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+            alert('Exportação JSON concluída. Verifique sua pasta de downloads.');
+        } catch (error) {
+            console.error('Erro ao exportar dados:', error);
+            alert('Erro ao exportar os dados. Veja o console para detalhes.');
+        }
+    }
+
+    // Verifica autenticação ao carregar
+    window.addEventListener('load', () => {
+        verificarAutenticacao();
+        atualizarTudo();
+    });
+</script>
+</body>
+</html>
 </script>
 </body>
 </html>
